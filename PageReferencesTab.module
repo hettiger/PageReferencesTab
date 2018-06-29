@@ -114,6 +114,7 @@ class PageReferencesTab extends WireData implements Module, ConfigurableModule
 	 */
 	public function hookBuildForm(HookEvent $event)
 	{
+		/** @var InputfieldForm $form */
 		$form = $event->return;
 
 		$tabId = $this->className . 'References';
@@ -153,23 +154,28 @@ class PageReferencesTab extends WireData implements Module, ConfigurableModule
 
 		$inputfields->add($field);
 
-		$pageEditTab = $form->find('id=' . $consequentTabId)->first();
-		$form->insertBefore($inputfields, $pageEditTab);
-
-		/**
-		 * This hook is required to actually move the tab to the correct position
-		 *
-		 * @see https://processwire.com/talk/topic/15870-how-to-add-own-tab-in-admin-on-edit-page-via-api/?tab=comments#comment-141640
-		 */
-		$this->addHookAfter('ProcessPageEdit::getTabs', function ($event) use ($tabId, $tabTitle, $consequentTabId) {
-			$targetIndex = array_search($consequentTabId, array_keys($event->return), true);
-
-			$event->return = array_merge(
-				array_slice($event->return, 0, $targetIndex, true),
-				array($tabId => $tabTitle),
-				array_slice($event->return, $targetIndex, null, true)
-			);
-		});
+		$consequentTab = $form->find('id=' . $consequentTabId)->first();
+		
+		if ($consequentTab) {
+			$form->insertBefore($inputfields, $consequentTab);
+			
+			/**
+			 * This hook is required to actually move the tab to the correct position
+			 *
+			 * @see https://processwire.com/talk/topic/15870-how-to-add-own-tab-in-admin-on-edit-page-via-api/?tab=comments#comment-141640
+			 */
+			$this->addHookAfter('ProcessPageEdit::getTabs', function ($event) use ($tabId, $tabTitle, $consequentTabId) {
+				$targetIndex = array_search($consequentTabId, array_keys($event->return), true);
+	
+				$event->return = array_merge(
+					array_slice($event->return, 0, $targetIndex, true),
+					array($tabId => $tabTitle),
+					array_slice($event->return, $targetIndex, null, true)
+				);
+			});
+		} else {
+			$form->prepend($inputfields);
+		}
 
 		$event->return = $form;
 	}
