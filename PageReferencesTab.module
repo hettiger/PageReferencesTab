@@ -1,5 +1,7 @@
 <?php
 
+namespace ProcessWire;
+
 /**
  * ProcessWire Page References Tab
  *
@@ -9,7 +11,8 @@
  *
  */
 
-class PageReferencesTab extends WireData implements Module, ConfigurableModule {
+class PageReferencesTab extends WireData implements Module, ConfigurableModule
+{
 
 	/**
 	 * @var Page Page being edited
@@ -18,12 +21,22 @@ class PageReferencesTab extends WireData implements Module, ConfigurableModule {
 	private $editedPage;
 
 	/**
+	 * __construct() is the right place to init config vars before they'll get populated
+	 *
+	 */
+	public function __construct()
+	{
+		$this->enabledTemplates = array();
+	}
+
+	/**
 	 * Return information about this module (required)
 	 *
 	 * @return array
 	 *
 	 */
-	static public function getModuleInfo() {
+	static public function getModuleInfo()
+	{
 		return array(
 			'title'    => 'Page References Tab',
 			'summary'  => 'Adds a tab with a list of pages referencing the current page to the page edit view.',
@@ -34,18 +47,33 @@ class PageReferencesTab extends WireData implements Module, ConfigurableModule {
 	}
 
 	/**
-	 * __construct() is the right place to init config vars before they'll get populated
+	 * Return an InputfieldsWrapper of Inputfields used to configure the class
 	 *
+	 * @param array $data Array of config values indexed by field name
+	 * @return InputfieldWrapper
+	 * @throws WirePermissionException
 	 */
-	public function __construct() {
-		$this->enabledTemplates = array();
-	}
+	public static function getModuleConfigInputfields(array $data)
+	{
+		$wrapper = new InputFieldWrapper();
 
-	/**
-	 * init() is called when PW's API is ready
-	 *
-	 */
-	public function init() {
+		$fieldEnabledTemplates = wire('modules')->get('InputfieldAsmSelect');
+		$fieldEnabledTemplates->attr('name+id', 'enabledTemplates');
+		$fieldEnabledTemplates->label = __('Enabled templates', __FILE__);
+		$fieldEnabledTemplates->description = __('"References" tab will only be shown for chosen templates. If no template is chosen, "References" tab will be shown for all templates.', __FILE__);
+		$fieldEnabledTemplates->attr('title', __('Enable template', __FILE__));
+		$fieldEnabledTemplates->setAsmSelectOption('sortable', false);
+
+		// populate with all available templates
+		foreach (wire('templates') as $t) {
+			// filter out system templates
+			if (!($t->flags & Template::flagSystem)) $fieldEnabledTemplates->addOption($t->name);
+		}
+		if (isset($data['enabledTemplates'])) $fieldEnabledTemplates->value = $data['enabledTemplates'];
+
+		$wrapper->add($fieldEnabledTemplates);
+
+		return $wrapper;
 	}
 
 	/**
@@ -53,26 +81,27 @@ class PageReferencesTab extends WireData implements Module, ConfigurableModule {
 	 * Add the hook here to be able to skip it based on the template of the edited page.
 	 *
 	 */
-	public function ready() {
+	public function ready()
+	{
 		// we're interested in page editor only
-		if(wire('page')->process != 'ProcessPageEdit') return;
+		if (wire('page')->process != 'ProcessPageEdit') return;
 
 		// skip changing templates (only target the actual edit form)
 		$id = (int)$this->input->get('id');
-		if(!$id) return;
+		if (!$id) return;
 
 		// wire('page') would be the page with ProcessPageEdit
 		// GET parameter id tells the page that's being edited
 		$this->editedPage = wire('pages')->get($id);
 
 		// don't even consider system templates
-		if($this->editedPage->template->flags & Template::flagSystem) return;
+		if ($this->editedPage->template->flags & Template::flagSystem) return;
 
 		// hook only if
 		// 1) no templates have been chosen (=all enabled) OR
 		// 2) the template of the edited page has been chosen
-		if(count($this->enabledTemplates) == 0 or
-		   in_array($this->editedPage->template->name, $this->enabledTemplates)) {
+		if (count($this->enabledTemplates) == 0 or
+			in_array($this->editedPage->template->name, $this->enabledTemplates)) {
 			$this->addHookAfter('ProcessPageEdit::buildForm', $this, 'hookBuildForm');
 		}
 	}
@@ -80,46 +109,69 @@ class PageReferencesTab extends WireData implements Module, ConfigurableModule {
 	/**
 	 * Add References tab to page edit form
 	 *
+	 * @param HookEvent $event
+	 * @throws WirePermissionException
 	 */
-	public function hookBuildForm(HookEvent $event) {
-		// get the InputFieldForm object from the event (return value of buildForm())
+	public function hookBuildForm(HookEvent $event)
+	{
 		$form = $event->return;
 
-		// create the tab
-		$refTab = new InputfieldWrapper();
-		$refTab->attr('id', $this->className() . 'References');
-		$refTab->attr('title', $this->_('References'));
+		$tabId = $this->className . 'References';
+		$tabTitle = $this->_('References');
+		$consequentTabId = 'ProcessPageEditSettings';
 
-		// construct contents inside a container
+		$inputfields = new InputfieldWrapper();
+		$inputfields->attr('id+name', $tabId);
+		$inputfields->attr('title', $tabTitle);
+
+		/** @var InputfieldMarkup $field */
 		$field = $this->modules->get("InputfieldMarkup");
 		$field->label = $this->_("Pages referencing this page via a Page field");
 
-		// construct a table with title, path, field and action links
+		/** @var MarkupAdminDataTable $table */
 		$table = $this->modules->get("MarkupAdminDataTable");
+
 		$table->headerRow(array(
 			$this->_('Page title'),
 			$this->_('Page path'),
 			$this->_('Field'),
 			$this->_('Actions')
-			));
+		));
+
 		$table->setEncodeEntities(false);
 		$table->rowCount = 0;
 
-		// iterate over fields
-		// handle each field separately to be able to tell which field matched (instead of f1|f2|f2=$page)
-		foreach(wire('fields') as $refField) {
+		foreach (wire('fields') as $refField) {
 			$this->addReferencesToTable($table, $refField);
 		}
 
-		if($table->rowCount) {
+		if ($table->rowCount) {
 			$field->value = $table->render();
 		} else {
 			$field->value = $this->_('Other pages are not referencing this page.');
 		}
 
-		// append the markup to the tab and the tab to the form
-		$refTab->append($field);
-		$form->append($refTab);
+		$inputfields->add($field);
+
+		$pageEditTab = $form->find('id=' . $consequentTabId)->first();
+		$form->insertBefore($inputfields, $pageEditTab);
+
+		/**
+		 * This hook is required to actually move the tab to the correct position
+		 *
+		 * @see https://processwire.com/talk/topic/15870-how-to-add-own-tab-in-admin-on-edit-page-via-api/?tab=comments#comment-141640
+		 */
+		$this->addHookAfter('ProcessPageEdit::getTabs', function ($event) use ($tabId, $tabTitle, $consequentTabId) {
+			$targetIndex = array_search($consequentTabId, array_keys($event->return), true);
+
+			$event->return = array_merge(
+				array_slice($event->return, 0, $targetIndex, true),
+				array($tabId => $tabTitle),
+				array_slice($event->return, $targetIndex, null, true)
+			);
+		});
+
+		$event->return = $form;
 	}
 
 	/**
@@ -131,61 +183,33 @@ class PageReferencesTab extends WireData implements Module, ConfigurableModule {
 	 * @param string|Field $selectorField Optional string (or Field) to be used in selector as the field part. Defaults to $refField.
 	 *
 	 */
-	private function addReferencesToTable($table, $refField, $selectorField=null) {
+	private function addReferencesToTable($table, $refField, $selectorField = null)
+	{
 		// we're done if the field is a system field
-		if($refField->flags & Field::flagSystem) return;
+		if ($refField->flags & Field::flagSystem) return;
 
 		// recursion to handle fields inside repeaters
-		if($refField->type == 'FieldtypeRepeater') {
-			foreach($refField->repeaterFields as $repeaterFieldId) {
+		if ($refField->type == 'FieldtypeRepeater') {
+			foreach ($refField->repeaterFields as $repeaterFieldId) {
 				$repeaterField = wire('fields')->get($repeaterFieldId);
 				$this->addReferencesToTable($table, $repeaterField, "$refField.$repeaterField");
 			}
 		}
 
 		// we're done if the field isn't a page reference either
-		if($refField->type != 'FieldtypePage') return;
+		if ($refField->type != 'FieldtypePage') return;
 
 		// find references
-		if(!$selectorField) $selectorField = $refField;
+		if (!$selectorField) $selectorField = $refField;
 		$refs = wire('pages')->find("$selectorField=" . $this->editedPage->id);
 
-		foreach($refs as $refPage) {
+		foreach ($refs as $refPage) {
 			$actions = array();
 			// show only appropriate actions
-			if($refPage->viewable()) array_push($actions, '<a href="' . $refPage->url . '">view</a>');
-			if($refPage->editable()) array_push($actions, '<a href="' . $this->config->urls->admin . 'page/edit/?id=' . $refPage->id . '">edit</a>');
+			if ($refPage->viewable()) array_push($actions, '<a href="' . $refPage->url . '">view</a>');
+			if ($refPage->editable()) array_push($actions, '<a href="' . $this->config->urls->admin . 'page/edit/?id=' . $refPage->id . '">' . $this->_('edit') . '</a>');
 			$table->row(array($refPage->title, $refPage->path, $selectorField, implode(' | ', $actions)));
 			$table->rowCount++;
 		}
-	}
-
-	/**
-	 * Return an InputfieldsWrapper of Inputfields used to configure the class
-	 *
-	 * @param array $data Array of config values indexed by field name
-	 * @return InputfieldsWrapper
-	 *
-	 */
-	public static function getModuleConfigInputfields(array $data) {
-		$wrapper = new InputFieldWrapper();
-
-		$fieldEnabledTemplates = wire('modules')->get('InputfieldAsmSelect');
-		$fieldEnabledTemplates->attr('name+id', 'enabledTemplates');
-		$fieldEnabledTemplates->label = __('Enabled templates', __FILE__);
-		$fieldEnabledTemplates->description = __('"References" tab will only be shown for chosen templates. If no template is chosen, "References" tab will be shown for all templates.', __FILE__);
-		$fieldEnabledTemplates->attr('title', __('Enable template', __FILE__));
-		$fieldEnabledTemplates->setAsmSelectOption('sortable', false);
-
-		// populate with all available templates
-		foreach(wire('templates') as $t) {
-			// filter out system templates
-			if(!($t->flags & Template::flagSystem)) $fieldEnabledTemplates->addOption($t->name);
-		}
-		if(isset($data['enabledTemplates'])) $fieldEnabledTemplates->value = $data['enabledTemplates'];
-
-		$wrapper->add($fieldEnabledTemplates);
-
-		return $wrapper;
 	}
 }
